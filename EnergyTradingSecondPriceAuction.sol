@@ -1,13 +1,13 @@
-pragma solidity >0.4.23 <0.7.0;
-
+pragma solidity >0.4.23 <0.7.0; // testing to return array with struct
 /**
  * @title  P2P Energy trading contract for EV charging
  * @author Noureddine Lasla — nlasla@hbku.edu.qa,   2019.
  */
 
 contract EvChargingMarket { 
-    enum ContractState {NotCreated, Created, HasOffer, Established, ReadyForPayement, ReportNotOk, Closed}
+    enum ContractState {NotCreated, Created, HasOffer, Established, InProgress, ReadyForPayement, ReportNotOk, Closed}
     enum AuctionState {Created, Closed, RevealEnd}
+    uint [3][3] zone = [[1,2,3],[4,5,6],[7,8,9]];
     
     struct Payment {
         uint bidId;
@@ -34,7 +34,14 @@ contract EvChargingMarket {
         SealedBid[] bids;
         AuctionState state;
     }
-
+    
+    // Auth Token
+    struct AuthorizationToken{
+     uint aucID;
+     uint[3]zoneArea;
+     bool active;
+    }
+    
     struct Contract {
         address buyer; // EV address
         address  seller; // Winner EP address
@@ -46,6 +53,9 @@ contract EvChargingMarket {
         uint256  deliveryTime;
         uint256  auctionTimeOut;
         uint  deliveryLocation;
+        uint8[] zoneArea;
+        uint progress; // progress amount
+        uint[] padsLocation; // location of pads charged EV
         ContractState state;       
     }
 
@@ -99,9 +109,14 @@ contract EvChargingMarket {
         require(accounts[_user].isUser);
         _;
     }
-
+    modifier tokenExisit (){
+        require(tokens[msg.sender].active == true);
+        _;
+    }
+    
     uint public totalAuction;
-
+    // map token to User
+    mapping (address => AuthorizationToken)tokens;
     mapping (uint => Contract) public contracts;
     mapping (uint => Auction)  auctions;
     mapping (address => Account) public accounts;
@@ -150,6 +165,7 @@ contract EvChargingMarket {
     {
         auctions[_aucId].state = AuctionState.RevealEnd;
         contracts[_aucId].state= ContractState.Established;
+        tokens[contracts[_aucId].buyer].active = true;
     }
     
     function revealOffer (uint _aucId, uint _price, uint _bidId) public 
@@ -189,7 +205,17 @@ contract EvChargingMarket {
             emit ReportOk(_aucId);
         }
     }
-
+    // bader code function progress update
+    function setBuyerUpdateProgress (uint _aucId, bool _state, uint _amount, uint _locationPad) public
+    tokenExisit()
+    {
+        contracts[_aucId].progress += _amount;
+        contracts[_aucId].padsLocation.push(_locationPad);
+        if (_state == true || contracts[_aucId].amount <= contracts[_aucId].progress){
+           tokens[contracts[_aucId].buyer].active = false;
+           setBuyerMeterReport(_aucId,true);
+        }
+    }
     function setSellerMeterReport (uint _aucId, bool _state) public 
         auctionExisit(_aucId)
         contractEstablished(_aucId)
@@ -208,7 +234,7 @@ contract EvChargingMarket {
         reportsOk(_aucId)   
     {
         uint256 date = contracts[_aucId].deliveryTime;
-        uint amount = contracts[_aucId].amount;
+        uint amount = contracts[_aucId].progress;// bill using progress amount instead of declared
         uint amounToPay = amount * contracts[_aucId].currentPrice;
         accounts[_buyer].payments.push(Payment(_aucId, date, amount, true, amounToPay));
         accounts[_buyer].balance -= int256(amounToPay);
@@ -230,10 +256,24 @@ contract EvChargingMarket {
     function getNumberOfReq() public view returns (uint) {
         return totalAuction;
     }
-
+    // *Bader Coding Area*
+     function getHash(uint _cost) public view returns (bytes32) {
+        return keccak256(abi.encodePacked(_cost));
+    }
+    // request token
+    function getToken () public tokenExisit()  view returns (uint[3] memory padLocation, uint _aucId) 
+    {
+        return (tokens[msg.sender].zoneArea,tokens[msg.sender].aucID);
+    }
+    // request Report
+    function getReport() public reportsOk(tokens[msg.sender].aucID) view returns (address buyer,address seller, uint totalPayment, uint auctionID,uint[] memory padLocation){
+        return (contracts[tokens[msg.sender].aucID].buyer,contracts[tokens[msg.sender].aucID].seller,contracts[tokens[msg.sender].aucID].progress, tokens[msg.sender].aucID,contracts[tokens[msg.sender].aucID].padsLocation);
+    } 
+    ///**
     function storeAndLogNewReq(address _buyer, uint _id, uint _amount, uint _price, uint256 _time, uint256 _auctionTime, uint _location) private {
         contracts[_id].buyer = _buyer;
         contracts[_id].amount = _amount;
+        contracts[_id].progress = 0; // added
         contracts[_id].buyerMaxPrice = _price;
         contracts[_id].deliveryTime = _time;
         contracts[_id].auctionTimeOut = now + _auctionTime;
@@ -241,7 +281,25 @@ contract EvChargingMarket {
         contracts[_id].state = ContractState.Created;
         auctions[_id].state = AuctionState.Created;
         auctions[_id].nbBid = 0;
+        
+        // token Established but not yet active
+        // store in Token arrray of Allowed charged Area
+         for (uint i =0; i<3; i++){
+             tokens[msg.sender].zoneArea[i]=zone[contracts[tokens[msg.sender].aucID].deliveryLocation-1][i];
+        }
+        tokens[_buyer].aucID = _id;
+        tokens[contracts[_id].buyer].active = false;
+        
         emit LogReqCreated(_buyer, _id, _price, _amount, _time, _auctionTime, _location);
+    }
+    
+    /// for testing
+    function RUN() public{
+        createReq(50,10,1,1,3);
+        makeSealedOffer(0,0x036b6384b5eca791c62761152d0c79bb0604c104a5fb6f4eb0703f3154bb3db0);
+        closeAuction(0);
+        revealOffer(0,5,0);
+        endReveal(0);
     }
 
 }
